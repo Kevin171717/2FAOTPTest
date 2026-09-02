@@ -1,0 +1,29 @@
+.env
+.env.*
+!.env.example
+.venv/
+node_modules/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Paid API responses/checkpoints can contain message excerpts and response IDs.
+results/bge_openai/*.json
+results/regex_openai/*.json
+
+# Local previews and inspection traces are reproducible build artifacts.
+outputs/**/preview/
+*.inspect.ndjson
+outputs/
+
+# Generated reproduction outputs; keep only the verified reference workbook.
+results/reproduction/reproduction_original_results.xlsx
+results/reproduction/reproduction_paper_results.xlsx
+
+# Private working material and copyrighted/local references are not published.
+archive/
+references/
+legacy/otp_code_extractor_openai_annotated.py
+
+~$*.xlsx
+*.tmp

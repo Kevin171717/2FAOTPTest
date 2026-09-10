@@ -1,19 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SpreadsheetFile, Workbook } from "@oai/artifact-tool";
+import { FileBlob, SpreadsheetFile, Workbook } from "@oai/artifact-tool";
 
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, "..");
-const hybridPath = path.join(ROOT, "results", "bge_openai", "bge_openai_experiment_results.json");
-const openaiPath = path.join(ROOT, "results", "regex_openai", "regex_openai_experiment_results.json");
-const outputDir = path.join(ROOT, "outputs", "regex_openai_comparison");
-const outputPath = path.join(outputDir, "Regex_OpenAI_外部成本比較_中文.xlsx");
+const hybridPath = path.join(ROOT, "results", "bge_openai", "bge_openai_gpt4o_full.json");
+const openaiPath = path.join(ROOT, "results", "regex_openai", "regex_openai_gpt4o_full.json");
+const lunaHybridPath = path.join(ROOT, "results", "bge_openai", "bge_openai_experiment_results.json");
+const lunaOpenAIPath = path.join(ROOT, "results", "regex_openai", "regex_openai_experiment_results.json");
+const outputDir = path.join(ROOT, "outputs", "gpt4o_experiment_20260910");
+const outputPath = path.join(outputDir, "GPT4o_完整實驗比較_中文.xlsx");
 const previewDir = path.join(outputDir, "preview");
 
 const hybrid = JSON.parse(await fs.readFile(hybridPath, "utf8"));
 const regexOpenAI = JSON.parse(await fs.readFile(openaiPath, "utf8"));
+const lunaHybrid = JSON.parse(await fs.readFile(lunaHybridPath, "utf8"));
+const lunaRegexOpenAI = JSON.parse(await fs.readFile(lunaOpenAIPath, "utf8"));
 await fs.mkdir(outputDir, { recursive: true });
 await fs.mkdir(previewDir, { recursive: true });
 
@@ -33,6 +37,15 @@ const hybridStats = {
   max: Math.max(...hybridLatencies),
   total: hybridLatencies.reduce((sum, value) => sum + value, 0),
 };
+const lunaHybridLatencies = lunaHybrid.detail.filter((row) => row.api).map((row) => row.api.latency_ms);
+const lunaHybridStats = {
+  median: percentile(lunaHybridLatencies, 0.5),
+  p95: percentile(lunaHybridLatencies, 0.95),
+  max: Math.max(...lunaHybridLatencies),
+  total: lunaHybridLatencies.reduce((sum, value) => sum + value, 0),
+};
+const hybridSavings = 1 - hybrid.api_usage.estimated_cost_usd / regexOpenAI.api_usage.estimated_cost_usd;
+const modelDocsUrl = `https://developers.openai.com/api/docs/models/${regexOpenAI.experiment.openai.model}`;
 
 const hybridBySequence = new Map(hybrid.detail.map((row) => [row.sequence, row]));
 const allRows = regexOpenAI.detail.map((row) => ({
@@ -56,6 +69,7 @@ for (const { hybrid: h, openai: o } of allRows) {
 const wb = Workbook.create();
 const summary = wb.worksheets.add("實驗摘要");
 const costs = wb.worksheets.add("外部成本");
+const modelCompare = wb.worksheets.add("模型比較");
 const differences = wb.worksheets.add("差異與遺漏");
 const details = wb.worksheets.add("全部明細");
 const calls = wb.worksheets.add("API 呼叫明細");
@@ -77,7 +91,7 @@ const C = {
   white: "#FFFFFF",
 };
 
-for (const sheet of [summary, costs, differences, details, calls, notes]) {
+for (const sheet of [summary, costs, modelCompare, differences, details, calls, notes]) {
   sheet.showGridLines = false;
 }
 
@@ -86,9 +100,9 @@ function title(sheet, address, text, subtitle = "") {
   const anchor = sheet.getRange(address.split(":")[0]);
   anchor.values = [[text]];
   anchor.format = {
-    fill: C.ink,
-    font: { color: C.white, bold: true, size: 18 },
+    font: { color: C.ink, bold: true, size: 16 },
     verticalAlignment: "center",
+    borders: { bottom: { style: "medium", color: C.navy } },
   };
   sheet.getRange(address).format.rowHeight = 30;
   if (subtitle) {
@@ -97,7 +111,7 @@ function title(sheet, address, text, subtitle = "") {
     const subtitleRange = sheet.getRange(`A${startRow}:${endCol}${startRow}`);
     subtitleRange.merge();
     subtitleRange.values = [[subtitle]];
-    subtitleRange.format = { fill: C.grayLight, font: { color: C.ink, italic: true }, wrapText: true };
+    subtitleRange.format = { font: { color: C.ink, italic: true }, wrapText: true };
   }
 }
 
@@ -146,7 +160,7 @@ const comparisonName = {
 title(
   summary,
   "A1:N2",
-  "Regex + OpenAI 實驗與外部成本比較",
+  "GPT-4o OTP 完整實驗比較",
   `128 筆資料 | 模型 ${regexOpenAI.experiment.openai.model} | 正式實驗 | 產生時間 ${new Date().toISOString().slice(0, 10)}`,
 );
 
@@ -261,7 +275,7 @@ summary.getRange("A24:N27").merge();
 summary.getRange("A24").values = [[
   "兩種 OpenAI 架構在本資料集的最終 Top-1 完全相同：OTP 103/103，負樣本誤抽 0/15。"
   + " Regex+OpenAI 的優點是流程簡單；但 Hybrid 只送 66 筆 API，相比 123 筆減少 57 次外傳與呼叫，"
-  + "並且在品質不變下節省約 19.2% API 成本。因此這 128 筆上，Hybrid 是較合理的部署方案。",
+  + `並且在品質不變下節省約 ${(hybridSavings * 100).toFixed(1)}% API 成本。因此這 128 筆上，Hybrid 是較合理的部署方案。`,
 ]];
 summary.getRange("A24:N27").format = { fill: C.greenLight, font: { color: C.ink, size: 12 }, wrapText: true, verticalAlignment: "center", borders: { preset: "outside", style: "thin", color: C.gray } };
 
@@ -275,10 +289,10 @@ summary.freezePanes.freezeRows(3);
 title(costs, "A1:M2", "API 外部成本與延遲", "費率與 token 數據可稽核；缺少的延遲數據留白，不以 0 代替。");
 costs.getRange("A5:D5").values = [["費率假設", "USD / 1M tokens", "模型", "來源"]];
 costs.getRange("A6:D9").values = [
-  ["未快取輸入", regexOpenAI.experiment.openai.input_usd_per_m, regexOpenAI.experiment.openai.model, "https://developers.openai.com/api/docs/models/gpt-5.6-luna"],
-  ["快取輸入", regexOpenAI.experiment.openai.cached_input_usd_per_m, regexOpenAI.experiment.openai.model, "https://developers.openai.com/api/docs/models/gpt-5.6-luna"],
-  ["Cache write", regexOpenAI.experiment.openai.cache_write_usd_per_m, regexOpenAI.experiment.openai.model, "https://developers.openai.com/api/docs/models/gpt-5.6-luna"],
-  ["輸出", regexOpenAI.experiment.openai.output_usd_per_m, regexOpenAI.experiment.openai.model, "https://developers.openai.com/api/docs/models/gpt-5.6-luna"],
+  ["未快取輸入", regexOpenAI.experiment.openai.input_usd_per_m, regexOpenAI.experiment.openai.model, modelDocsUrl],
+  ["快取輸入", regexOpenAI.experiment.openai.cached_input_usd_per_m, regexOpenAI.experiment.openai.model, modelDocsUrl],
+  ["Cache write（若回報）", regexOpenAI.experiment.openai.cache_write_usd_per_m, regexOpenAI.experiment.openai.model, modelDocsUrl],
+  ["輸出", regexOpenAI.experiment.openai.output_usd_per_m, regexOpenAI.experiment.openai.model, modelDocsUrl],
 ];
 header(costs.getRange("A5:D5"));
 body(costs.getRange("A6:D9"));
@@ -330,6 +344,59 @@ costs.getRange("A:A").format.columnWidth = 28;
 costs.getRange("D:D").format.columnWidth = 54;
 costs.getRange("F:F").format.columnWidth = 55;
 costs.freezePanes.freezeRows(3);
+
+title(modelCompare, "A1:K2", "GPT-4o 與 Luna 比較", "相同資料、相同架構；品質相同時，重點比較延遲與外部 API 成本。");
+modelCompare.getRange("A5:K5").values = [[
+  "架構", "模型", "OTP Top-1", "負樣本誤抽", "API 呼叫", "總 tokens", "成本 (USD)",
+  "平均延遲 ms", "P50 ms", "P95 ms", "最大延遲 ms",
+]];
+modelCompare.getRange("A6:K9").values = [
+  ["Regex+BGE+OpenAI fallback", lunaHybrid.experiment.openai.model, lunaHybrid.metrics.otp_top1.hits / lunaHybrid.metrics.otp_top1.total, lunaHybrid.metrics.negative_false_extraction.hits / lunaHybrid.metrics.negative_false_extraction.total, lunaHybrid.api_usage.api_calls, lunaHybrid.api_usage.total_tokens, lunaHybrid.api_usage.estimated_cost_usd, lunaHybrid.api_usage.average_latency_ms, lunaHybridStats.median, lunaHybridStats.p95, lunaHybridStats.max],
+  ["Regex+BGE+OpenAI fallback", hybrid.experiment.openai.model, hybrid.metrics.otp_top1.hits / hybrid.metrics.otp_top1.total, hybrid.metrics.negative_false_extraction.hits / hybrid.metrics.negative_false_extraction.total, hybrid.api_usage.api_calls, hybrid.api_usage.total_tokens, hybrid.api_usage.estimated_cost_usd, hybrid.api_usage.average_latency_ms, hybridStats.median, hybridStats.p95, hybridStats.max],
+  ["Regex+OpenAI", lunaRegexOpenAI.experiment.openai.model, lunaRegexOpenAI.metrics.otp_top1.hits / lunaRegexOpenAI.metrics.otp_top1.total, lunaRegexOpenAI.metrics.negative_false_extraction.hits / lunaRegexOpenAI.metrics.negative_false_extraction.total, lunaRegexOpenAI.api_usage.api_calls, lunaRegexOpenAI.api_usage.total_tokens, lunaRegexOpenAI.api_usage.estimated_cost_usd, lunaRegexOpenAI.api_usage.average_latency_ms, lunaRegexOpenAI.api_usage.median_latency_ms, lunaRegexOpenAI.api_usage.p95_latency_ms, lunaRegexOpenAI.api_usage.max_latency_ms],
+  ["Regex+OpenAI", regexOpenAI.experiment.openai.model, regexOpenAI.metrics.otp_top1.hits / regexOpenAI.metrics.otp_top1.total, regexOpenAI.metrics.negative_false_extraction.hits / regexOpenAI.metrics.negative_false_extraction.total, regexOpenAI.api_usage.api_calls, regexOpenAI.api_usage.total_tokens, regexOpenAI.api_usage.estimated_cost_usd, regexOpenAI.api_usage.average_latency_ms, regexOpenAI.api_usage.median_latency_ms, regexOpenAI.api_usage.p95_latency_ms, regexOpenAI.api_usage.max_latency_ms],
+];
+header(modelCompare.getRange("A5:K5"));
+body(modelCompare.getRange("A6:K9"));
+modelCompare.getRange("C6:D9").format.numberFormat = "0.0%";
+modelCompare.getRange("G6:G9").format.numberFormat = "$0.000000";
+modelCompare.getRange("H6:K9").format.numberFormat = "#,##0";
+modelCompare.getRange("A7:K7").format.fill = C.blueLight;
+modelCompare.getRange("A9:K9").format.fill = C.blueLight;
+
+modelCompare.getRange("A12:G12").values = [["架構", "GPT-4o 品質差", "GPT-4o 成本差", "成本倍數", "平均延遲差", "P50 延遲差", "結論"]];
+modelCompare.getRange("A13:G14").values = [
+  ["Regex+BGE+OpenAI fallback", 0, hybrid.api_usage.estimated_cost_usd - lunaHybrid.api_usage.estimated_cost_usd, hybrid.api_usage.estimated_cost_usd / lunaHybrid.api_usage.estimated_cost_usd, hybrid.api_usage.average_latency_ms / lunaHybrid.api_usage.average_latency_ms - 1, hybridStats.median / lunaHybridStats.median - 1, "品質不變；延遲接近，但 GPT-4o 單價較高。"],
+  ["Regex+OpenAI", 0, regexOpenAI.api_usage.estimated_cost_usd - lunaRegexOpenAI.api_usage.estimated_cost_usd, regexOpenAI.api_usage.estimated_cost_usd / lunaRegexOpenAI.api_usage.estimated_cost_usd, regexOpenAI.api_usage.average_latency_ms / lunaRegexOpenAI.api_usage.average_latency_ms - 1, regexOpenAI.api_usage.median_latency_ms / lunaRegexOpenAI.api_usage.median_latency_ms - 1, "品質不變；本次 GPT-4o 延遲較低，但成本明顯增加。"],
+];
+header(modelCompare.getRange("A12:G12"));
+body(modelCompare.getRange("A13:G14"));
+modelCompare.getRange("B13:B14").format.numberFormat = "+0.0%;-0.0%;0.0%";
+modelCompare.getRange("C13:C14").format.numberFormat = "$0.000000";
+modelCompare.getRange("D13:D14").format.numberFormat = "0.0x";
+modelCompare.getRange("E13:F14").format.numberFormat = "+0.0%;-0.0%;0.0%";
+
+modelCompare.getRange("M5:O5").values = [["架構與模型", "成本 (USD)", "平均延遲 ms"]];
+modelCompare.getRange("M6:O9").values = [
+  ["Hybrid Luna", lunaHybrid.api_usage.estimated_cost_usd, lunaHybrid.api_usage.average_latency_ms],
+  ["Hybrid GPT-4o", hybrid.api_usage.estimated_cost_usd, hybrid.api_usage.average_latency_ms],
+  ["Regex Luna", lunaRegexOpenAI.api_usage.estimated_cost_usd, lunaRegexOpenAI.api_usage.average_latency_ms],
+  ["Regex GPT-4o", regexOpenAI.api_usage.estimated_cost_usd, regexOpenAI.api_usage.average_latency_ms],
+];
+const modelCostChart = modelCompare.charts.add("bar", modelCompare.getRange("M5:N9"));
+modelCostChart.title = "各模型實驗 API 成本 (USD)";
+modelCostChart.hasLegend = false;
+modelCostChart.yAxis = { numberFormatCode: "$0.00", min: 0 };
+modelCostChart.setPosition("M12", "T27");
+const modelLatencyChart = modelCompare.charts.add("bar", [modelCompare.getRange("M5:M9"), modelCompare.getRange("O5:O9")]);
+modelLatencyChart.title = "平均 API 延遲 (ms)";
+modelLatencyChart.hasLegend = false;
+modelLatencyChart.yAxis = { numberFormatCode: "#,##0", min: 0 };
+modelLatencyChart.setPosition("U12", "AB27");
+modelCompare.getRange("A:K").format.columnWidth = 16;
+modelCompare.getRange("A:A").format.columnWidth = 32;
+modelCompare.getRange("G:G").format.columnWidth = 18;
+modelCompare.freezePanes.freezeRows(5);
 
 title(differences, "A1:L2", "差異與遺漏", "列出兩種 OpenAI 架構不同、任一評估失敗或 API 錯誤的資料。");
 differences.getRange("A5:L5").values = [[
@@ -411,12 +478,12 @@ notes.getRange("A6:F15").values = [
   ["資料集", "OTP 正樣本 103、驗證連結 10、負樣本 15", 128, "筆", "otp_dataset_dedup.xlsx", "兩架構使用同一份資料"],
   ["Regex+OpenAI 路由", "只要 Regex v2 有一個以上 OTP 候選就呼叫 API；無候選直接 NO_OTP", 123, "API 呼叫", "regex_openai_experiment_results.json", "不使用 BGE 分數"],
   ["Hybrid 路由", "Regex v2 候選先經 BGE gate，只將模糊案例送 API", 66, "API 呼叫", "bge_openai_experiment_results.json", "62 筆 BGE 直接輸出"],
-  ["外部成本", "依 Responses API 回報 token 使用量與 .env 保存費率計算", regexOpenAI.api_usage.estimated_cost_usd, "USD", "https://developers.openai.com/api/docs/models/gpt-5.6-luna", "未包含網路、人力與電力"],
+  ["外部成本", "依 Responses API 回報 token 使用量與 .env 保存費率計算", regexOpenAI.api_usage.estimated_cost_usd, "USD", modelDocsUrl, "未包含網路、人力與電力"],
   ["API 延遲", "從發出 API 要求到取得並解析結構化回應的 wall-clock 時間", regexOpenAI.api_usage.average_latency_ms, "ms/次", "regex_openai_experiment_results.json", "串行執行；實際服務可以並行"],
   ["能耗", "本次依使用者決定不量測", null, null, null, "OpenAI API 也不回傳單次推論能耗"],
   ["驗證連結", "兩個新實驗沿用原 Regex v2+BGE URL prediction，未將 URL 改送 OpenAI", 7 / 10, "正確率", "regex_v2_experiment_results.json", "因此兩架構都是 7/10"],
   ["評估泄漏防護", "Ground truth 只在完成預測後用於計分，不送入 prompt 或路由", true, null, "run_regex_openai_experiment.py", "Prompt 另存 SHA-256 於 JSON"],
-  ["快取計價", "Cache-write token 使用 .env 費率 0.25 USD / 1M", regexOpenAI.experiment.openai.cache_write_usd_per_m, "USD / 1M", "https://developers.openai.com/api/docs/models/gpt-5.6-luna", "保留 API 實際回報 token 類別"],
+  ["快取計價", "GPT-4o 官方列出輸入、快取輸入與輸出費率；本次 cache-write tokens 為 0", regexOpenAI.experiment.openai.cache_write_usd_per_m, "USD / 1M", modelDocsUrl, "若 API 回報 cache-write，估算採未快取輸入費率"],
   ["最終建議", "本資料集上 Hybrid 與 Regex+OpenAI 品質相同，但 Hybrid 外部呼叫、資料外傳與成本較低", null, null, null, "上線前應用新的 holdout set 再驗證"],
 ];
 header(notes.getRange("A5:F5"));
@@ -431,7 +498,7 @@ notes.getRange("E:E").format.columnWidth = 55;
 notes.getRange("F:F").format.columnWidth = 48;
 notes.freezePanes.freezeRows(5);
 
-for (const sheet of [summary, costs, differences, details, calls, notes]) {
+for (const sheet of [summary, costs, modelCompare, differences, details, calls, notes]) {
   const used = sheet.getUsedRange();
   used.format.font = { name: "Aptos", size: 10, color: C.ink };
 }
@@ -445,9 +512,19 @@ for (const [sheet, titleRange, headerRanges] of [
   [calls, "A1:N2", ["A5:N5"]],
   [notes, "A1:F2", ["A5:F5"]],
 ]) {
-  sheet.getRange(titleRange).format.font = { name: "Aptos Display", size: 18, bold: true, color: C.white };
+  sheet.getRange(titleRange).format.font = { name: "Aptos Display", size: 16, bold: true, color: C.ink };
   for (const range of headerRanges) header(sheet.getRange(range));
 }
+
+modelCompare.getRange("A1:K2").format.font = { name: "Aptos Display", size: 16, bold: true, color: C.ink };
+header(modelCompare.getRange("A5:K5"));
+header(modelCompare.getRange("A12:G12"));
+
+summary.tabColor = C.navy;
+modelCompare.tabColor = C.teal;
+costs.tabColor = C.green;
+
+wb.recalculate();
 
 const summaryInspect = await wb.inspect({
   kind: "table",
@@ -465,12 +542,25 @@ const errors = await wb.inspect({
 });
 console.log(errors.ndjson);
 
-for (const sheetName of ["實驗摘要", "外部成本", "差異與遺漏", "全部明細", "API 呼叫明細", "定義與來源"]) {
+for (const sheetName of ["實驗摘要", "外部成本", "模型比較", "差異與遺漏", "全部明細", "API 呼叫明細", "定義與來源"]) {
   const preview = await wb.render({ sheetName, autoCrop: "all", scale: 1, format: "png" });
   await fs.writeFile(path.join(previewDir, `${sheetName}.png`), new Uint8Array(await preview.arrayBuffer()));
 }
 
 const output = await SpreadsheetFile.exportXlsx(wb);
 await output.save(outputPath);
+const savedWorkbook = await SpreadsheetFile.importXlsx(await FileBlob.load(outputPath));
+const savedStructure = await savedWorkbook.inspect({
+  kind: "sheet,drawing",
+  maxChars: 6000,
+});
+console.log(savedStructure.ndjson);
+const savedErrors = await savedWorkbook.inspect({
+  kind: "match",
+  searchTerm: "#REF!|#DIV/0!|#VALUE!|#NAME\\?|#N/A|#NUM!|#NULL!|#SPILL!|#CALC!",
+  options: { useRegex: true, maxResults: 300 },
+  summary: "saved workbook formula error scan",
+});
+console.log(savedErrors.ndjson);
 console.log(JSON.stringify({ outputPath, notableRows: notableRows.length, apiRows: apiRows.length }));
 process.exitCode = 0;

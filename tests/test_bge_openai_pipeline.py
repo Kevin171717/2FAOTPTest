@@ -136,7 +136,7 @@ class BGEOpenAIGateTests(unittest.TestCase):
                 captured.update(kwargs)
                 return SimpleNamespace(
                     id="resp_test",
-                    model="gpt-5.6-luna",
+                    model="gpt-4o",
                     output_text=json.dumps(
                         {
                             "message_type": "OTP",
@@ -197,6 +197,8 @@ class BGEOpenAIGateTests(unittest.TestCase):
         self.assertGreater(decision.usage.estimated_cost_usd, 0)
         self.assertFalse(captured["store"])
         self.assertEqual(captured["text"]["format"]["type"], "json_schema")
+        self.assertNotIn("verbosity", captured["text"])
+        self.assertNotIn("reasoning", captured)
         payload = json.loads(captured["input"])
         self.assertEqual(payload["bge_top3_values"], ["853152", "2026"])
         self.assertNotIn("ground_truth", payload)

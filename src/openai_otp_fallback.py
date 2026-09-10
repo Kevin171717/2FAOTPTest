@@ -47,11 +47,11 @@ or BGE score is available.
 @dataclass
 class OpenAIConfig:
     api_key: str
-    model: str = "gpt-5.6-luna"
-    input_usd_per_m: float = 0.20
-    cached_input_usd_per_m: float = 0.02
-    cache_write_usd_per_m: float = 0.25
-    output_usd_per_m: float = 1.20
+    model: str = "gpt-4o"
+    input_usd_per_m: float = 2.50
+    cached_input_usd_per_m: float = 1.25
+    cache_write_usd_per_m: float = 2.50
+    output_usd_per_m: float = 10.00
     timeout_seconds: float = 60.0
     max_retries: int = 3
     max_output_tokens: int = 300
@@ -61,11 +61,11 @@ class OpenAIConfig:
     def from_environment(cls) -> "OpenAIConfig":
         return cls(
             api_key=os.getenv("OPENAI_API_KEY", "").strip(),
-            model=os.getenv("OPENAI_MODEL", "gpt-5.6-luna").strip(),
-            input_usd_per_m=float(os.getenv("OPENAI_INPUT_USD_PER_M", "0.20")),
-            cached_input_usd_per_m=float(os.getenv("OPENAI_CACHED_INPUT_USD_PER_M", "0.02")),
-            cache_write_usd_per_m=float(os.getenv("OPENAI_CACHE_WRITE_USD_PER_M", "0.25")),
-            output_usd_per_m=float(os.getenv("OPENAI_OUTPUT_USD_PER_M", "1.20")),
+            model=os.getenv("OPENAI_MODEL", "gpt-4o").strip(),
+            input_usd_per_m=float(os.getenv("OPENAI_INPUT_USD_PER_M", "2.50")),
+            cached_input_usd_per_m=float(os.getenv("OPENAI_CACHED_INPUT_USD_PER_M", "1.25")),
+            cache_write_usd_per_m=float(os.getenv("OPENAI_CACHE_WRITE_USD_PER_M", "2.50")),
+            output_usd_per_m=float(os.getenv("OPENAI_OUTPUT_USD_PER_M", "10.00")),
             timeout_seconds=float(os.getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "60")),
             max_retries=int(os.getenv("OPENAI_MAX_RETRIES", "3")),
             max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "300")),
@@ -206,6 +206,40 @@ class OpenAIFallbackClient:
             max_retries=0,
         )
 
+    def _request_options(
+        self,
+        *,
+        instructions: str,
+        request_text: str,
+        schema_name: str,
+        candidate_ids: list[str],
+        prompt_cache_key: str,
+    ) -> dict:
+        text_config = {
+            "format": {
+                "type": "json_schema",
+                "name": schema_name,
+                "strict": True,
+                "schema": response_schema(candidate_ids),
+            }
+        }
+        request = {
+            "model": self.config.model,
+            "instructions": instructions,
+            "input": request_text,
+            "text": text_config,
+            "max_output_tokens": self.config.max_output_tokens,
+            "prompt_cache_key": prompt_cache_key,
+            "store": False,
+        }
+
+        # GPT-4o supports Structured Outputs, but not GPT-5 reasoning/verbosity controls.
+        if self.config.model.lower().startswith("gpt-5"):
+            text_config["verbosity"] = "low"
+            request["reasoning"] = {"effort": self.config.reasoning_effort}
+
+        return request
+
     def _usage(self, response) -> APIUsage:
         usage = getattr(response, "usage", None)
         if usage is None:
@@ -270,22 +304,13 @@ class OpenAIFallbackClient:
         for attempt in range(1, self.config.max_retries + 1):
             try:
                 response = self.client.responses.create(
-                    model=self.config.model,
-                    instructions=SYSTEM_INSTRUCTIONS,
-                    input=request_text,
-                    text={
-                        "verbosity": "low",
-                        "format": {
-                            "type": "json_schema",
-                            "name": "otp_fallback_decision",
-                            "strict": True,
-                            "schema": response_schema(candidate_ids),
-                        },
-                    },
-                    reasoning={"effort": self.config.reasoning_effort},
-                    max_output_tokens=self.config.max_output_tokens,
-                    prompt_cache_key="otp-bge-openai-fallback-v1",
-                    store=False,
+                    **self._request_options(
+                        instructions=SYSTEM_INSTRUCTIONS,
+                        request_text=request_text,
+                        schema_name="otp_fallback_decision",
+                        candidate_ids=candidate_ids,
+                        prompt_cache_key="otp-bge-openai-fallback-v1",
+                    )
                 )
                 raw_decision = json.loads(response.output_text)
                 selected_id = raw_decision["selected_candidate_id"]
@@ -358,22 +383,13 @@ class OpenAIFallbackClient:
         for attempt in range(1, self.config.max_retries + 1):
             try:
                 response = self.client.responses.create(
-                    model=self.config.model,
-                    instructions=REGEX_ONLY_SYSTEM_INSTRUCTIONS,
-                    input=request_text,
-                    text={
-                        "verbosity": "low",
-                        "format": {
-                            "type": "json_schema",
-                            "name": "otp_regex_decision",
-                            "strict": True,
-                            "schema": response_schema(candidate_ids),
-                        },
-                    },
-                    reasoning={"effort": self.config.reasoning_effort},
-                    max_output_tokens=self.config.max_output_tokens,
-                    prompt_cache_key="otp-regex-openai-v1",
-                    store=False,
+                    **self._request_options(
+                        instructions=REGEX_ONLY_SYSTEM_INSTRUCTIONS,
+                        request_text=request_text,
+                        schema_name="otp_regex_decision",
+                        candidate_ids=candidate_ids,
+                        prompt_cache_key="otp-regex-openai-v1",
+                    )
                 )
                 raw_decision = json.loads(response.output_text)
                 selected_id = raw_decision["selected_candidate_id"]

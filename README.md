@@ -11,14 +11,16 @@ OpenAI 只能從 Regex 提供的候選 ID 中選擇，不得自行生成 OTP。G
 
 ## 實驗結果
 
-| 架構 | OTP Top-1 | OTP Top-3 | 驗證連結 | 負樣本誤抽 | API 呼叫 | API 成本 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 論文 baseline | 88/103 | 89/103 | 7/10 | 3/15 | 0 | US$0 |
-| Regex v2 + BGE | 91/103 | 95/103 | 7/10 | 5/15 | 0 | US$0 |
-| Regex v2 + BGE + OpenAI fallback | 103/103 | 103/103 | 7/10 | 0/15 | 66 | US$0.017872 |
-| Regex v2 + OpenAI | 103/103 | 103/103 | 7/10 | 0/15 | 123 | US$0.022116 |
+| 架構 | API 模型 | OTP Top-1 | OTP Top-3 | 驗證連結 | 負樣本誤抽 | API 呼叫 | API 成本 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 論文 baseline | 無 | 88/103 | 89/103 | 7/10 | 3/15 | 0 | US$0 |
+| Regex v2 + BGE | 無 | 91/103 | 95/103 | 7/10 | 5/15 | 0 | US$0 |
+| Regex v2 + BGE + OpenAI fallback | gpt-5.6-luna | 103/103 | 103/103 | 7/10 | 0/15 | 66 | US$0.017872 |
+| Regex v2 + OpenAI | gpt-5.6-luna | 103/103 | 103/103 | 7/10 | 0/15 | 123 | US$0.022116 |
+| Regex v2 + BGE + OpenAI fallback | gpt-4o | 103/103 | 103/103 | 7/10 | 0/15 | 66 | US$0.183908 |
+| Regex v2 + OpenAI | gpt-4o | 103/103 | 103/103 | 7/10 | 0/15 | 123 | US$0.233120 |
 
-這份資料上，兩種 OpenAI 架構品質相同。Hybrid 少 57 次 API 呼叫，節省約 19.2% API 成本，並減少外傳訊息數。正式部署前應另用未參與開發的 holdout set 檢查泛化能力。
+這份資料上，Luna 與 GPT-4o 的品質結果相同。使用 GPT-4o 時，Hybrid 少 57 次 API 呼叫，節省約 21.1% API 成本，並減少外傳訊息數。GPT-4o 的本次平均延遲在 Hybrid 約增加 0.7%，在 Regex-only 約降低 14.1%，但成本約為 Luna 的 10.3 至 10.5 倍。延遲會受網路與服務負載影響，正式部署前仍應用未參與開發的 holdout set 驗證泛化能力並重複量測。
 
 ## 環境需求
 
@@ -53,8 +55,12 @@ Copy-Item .env.example .env
 
 ```env
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.6-luna
+OPENAI_MODEL=gpt-4o
 ```
+
+預設使用 `gpt-4o`。費率估算依官方價格設定為輸入 US$2.50/M、快取輸入
+US$1.25/M、輸出 US$10/M。上表的 Luna 與 GPT-4o 結果各自來自獨立完整實驗；
+更換模型時應另存結果檔，避免覆蓋既有比較基準。
 
 `.env` 已加入 `.gitignore`。請不要把 API key 放在 source code、command line、Notebook 或實驗結果中。部署到 CI/CD 時，應使用 GitHub Actions secret `OPENAI_API_KEY`，不要寫入 repository variable 或 workflow YAML。
 

@@ -15,7 +15,7 @@ Open `.env` and fill only the value after `OPENAI_API_KEY=`:
 
 ```env
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.6-luna
+OPENAI_MODEL=gpt-4o
 ```
 
 Do not paste the key into source code, chat, or version control. Prices in

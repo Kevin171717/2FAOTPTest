@@ -46,7 +46,7 @@ class RegexOpenAIPipelineTests(unittest.TestCase):
                 captured.update(kwargs)
                 return SimpleNamespace(
                     id="resp_regex_test",
-                    model="gpt-5.6-luna",
+                    model="gpt-4o",
                     output_text=json.dumps(
                         {
                             "message_type": "OTP",
@@ -80,6 +80,8 @@ class RegexOpenAIPipelineTests(unittest.TestCase):
         self.assertNotIn("ground_truth", serialized)
         self.assertEqual(captured["prompt_cache_key"], "otp-regex-openai-v1")
         self.assertFalse(captured["store"])
+        self.assertNotIn("verbosity", captured["text"])
+        self.assertNotIn("reasoning", captured)
 
 
 if __name__ == "__main__":

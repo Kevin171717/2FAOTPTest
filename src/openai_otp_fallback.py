@@ -43,6 +43,20 @@ Use only the message, subject, Regex pattern type, and local candidate context. 
 or BGE score is available.
 """
 
+RAW_MESSAGE_SYSTEM_INSTRUCTIONS = """Extract actionable authentication information directly from the raw message.
+
+An actionable OTP is a one-time code that the recipient is being asked to enter or use now.
+Do not return discount codes, referral codes, order numbers, phone suffixes, dates, years,
+postal codes, street numbers, IP fragments, tracking tokens, or footer text.
+Messages saying that 2FA was enabled, disabled, added, removed, or changed are security
+notifications unless they also contain a new actionable OTP.
+
+Return OTP codes exactly as they appear in the message, without correcting, normalizing,
+joining, or inventing characters. Rank at most three codes, with the most likely code first.
+Return an actionable verification URL exactly as it appears in the message when present.
+If there is no actionable OTP or verification URL, return an empty otp_codes array and null URL.
+"""
+
 
 @dataclass
 class OpenAIConfig:
@@ -97,6 +111,24 @@ class APIDecision:
     message_type: str
     selected_candidate_id: str | None
     ranked_candidate_ids: list[str]
+    reason_code: str
+    usage: APIUsage
+    latency_ms: int
+    attempts: int
+    response_id: str
+    model: str
+
+    def to_dict(self) -> dict:
+        result = asdict(self)
+        result["usage"] = self.usage.to_dict()
+        return result
+
+
+@dataclass
+class RawAPIDecision:
+    message_type: str
+    otp_codes: list[str]
+    verification_url: str | None
     reason_code: str
     usage: APIUsage
     latency_ms: int
@@ -190,6 +222,50 @@ def response_schema(candidate_ids: list[str]) -> dict:
     }
 
 
+def raw_response_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "message_type": {
+                "type": "string",
+                "enum": [
+                    "OTP",
+                    "VERIFICATION_LINK",
+                    "OTP_AND_LINK",
+                    "SECURITY_NOTIFICATION",
+                    "PROMOTION",
+                    "OTHER_NO_OTP",
+                    "UNCERTAIN",
+                ],
+            },
+            "otp_codes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 3,
+            },
+            "verification_url": {
+                "type": ["string", "null"],
+            },
+            "reason_code": {
+                "type": "string",
+                "enum": [
+                    "EXPLICIT_ACTIONABLE_OTP",
+                    "EXPLICIT_VERIFICATION_LINK",
+                    "OTP_AND_VERIFICATION_LINK",
+                    "PROMO_CODE",
+                    "PHONE_SUFFIX",
+                    "ADDRESS_OR_FOOTER",
+                    "STATUS_NOTIFICATION",
+                    "NO_ACTIONABLE_AUTH",
+                    "AMBIGUOUS",
+                ],
+            },
+        },
+        "required": ["message_type", "otp_codes", "verification_url", "reason_code"],
+    }
+
+
 def _nested_int(obj, parent_name: str, child_name: str) -> int:
     parent = getattr(obj, parent_name, None)
     return int(getattr(parent, child_name, 0) or 0) if parent is not None else 0
@@ -212,7 +288,7 @@ class OpenAIFallbackClient:
         instructions: str,
         request_text: str,
         schema_name: str,
-        candidate_ids: list[str],
+        schema: dict,
         prompt_cache_key: str,
     ) -> dict:
         text_config = {
@@ -220,7 +296,7 @@ class OpenAIFallbackClient:
                 "type": "json_schema",
                 "name": schema_name,
                 "strict": True,
-                "schema": response_schema(candidate_ids),
+                "schema": schema,
             }
         }
         request = {
@@ -308,7 +384,7 @@ class OpenAIFallbackClient:
                         instructions=SYSTEM_INSTRUCTIONS,
                         request_text=request_text,
                         schema_name="otp_fallback_decision",
-                        candidate_ids=candidate_ids,
+                        schema=response_schema(candidate_ids),
                         prompt_cache_key="otp-bge-openai-fallback-v1",
                     )
                 )
@@ -387,7 +463,7 @@ class OpenAIFallbackClient:
                         instructions=REGEX_ONLY_SYSTEM_INSTRUCTIONS,
                         request_text=request_text,
                         schema_name="otp_regex_decision",
-                        candidate_ids=candidate_ids,
+                        schema=response_schema(candidate_ids),
                         prompt_cache_key="otp-regex-openai-v1",
                     )
                 )
@@ -411,6 +487,55 @@ class OpenAIFallbackClient:
                     message_type=message_type,
                     selected_candidate_id=selected_id,
                     ranked_candidate_ids=ranked_ids,
+                    reason_code=raw_decision["reason_code"],
+                    usage=self._usage(response),
+                    latency_ms=round((time.perf_counter() - start) * 1000),
+                    attempts=attempt,
+                    response_id=str(response.id),
+                    model=str(response.model),
+                )
+            except (RateLimitError, APITimeoutError, APIConnectionError) as exc:
+                last_error = exc
+            except APIStatusError as exc:
+                if exc.status_code < 500 and exc.status_code != 429:
+                    raise
+                last_error = exc
+
+            if attempt < self.config.max_retries:
+                time.sleep(min(8.0, 2 ** (attempt - 1)) + random.uniform(0.0, 0.35))
+
+        raise RuntimeError(
+            f"OpenAI request failed after {self.config.max_retries} attempts: {last_error}"
+        ) from last_error
+
+    def decide_raw_message(self, message: str) -> RawAPIDecision:
+        request_text = json.dumps({"message": message}, ensure_ascii=False, separators=(",", ":"))
+        start = time.perf_counter()
+        last_error = None
+
+        for attempt in range(1, self.config.max_retries + 1):
+            try:
+                request_options = self._request_options(
+                    instructions=RAW_MESSAGE_SYSTEM_INSTRUCTIONS,
+                    request_text=request_text,
+                    schema_name="raw_otp_extraction",
+                    schema=raw_response_schema(),
+                    prompt_cache_key="otp-raw-openai-v1",
+                )
+                request_options["max_output_tokens"] = max(self.config.max_output_tokens, 1200)
+                response = self.client.responses.create(
+                    **request_options
+                )
+                raw_decision = json.loads(response.output_text)
+                otp_codes = list(dict.fromkeys(str(code) for code in raw_decision["otp_codes"]))[:3]
+                verification_url = raw_decision["verification_url"]
+                if verification_url is not None:
+                    verification_url = str(verification_url)
+
+                return RawAPIDecision(
+                    message_type=raw_decision["message_type"],
+                    otp_codes=otp_codes,
+                    verification_url=verification_url,
                     reason_code=raw_decision["reason_code"],
                     usage=self._usage(response),
                     latency_ms=round((time.perf_counter() - start) * 1000),

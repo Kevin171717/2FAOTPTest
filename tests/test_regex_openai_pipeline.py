@@ -83,6 +83,47 @@ class RegexOpenAIPipelineTests(unittest.TestCase):
         self.assertNotIn("verbosity", captured["text"])
         self.assertNotIn("reasoning", captured)
 
+    def test_raw_api_receives_the_unmodified_message_without_candidates(self):
+        captured = {}
+        raw_message = "  User@example.com\nCode: 12 34 56\nhttps://example.com/a?x=1  "
+
+        class MockResponses:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return SimpleNamespace(
+                    id="resp_raw_test",
+                    model="gpt-4o",
+                    output_text=json.dumps(
+                        {
+                            "message_type": "OTP_AND_LINK",
+                            "otp_codes": ["12 34 56"],
+                            "verification_url": "https://example.com/a?x=1",
+                            "reason_code": "OTP_AND_VERIFICATION_LINK",
+                        }
+                    ),
+                    usage=SimpleNamespace(
+                        input_tokens=90,
+                        output_tokens=20,
+                        total_tokens=110,
+                        input_tokens_details=SimpleNamespace(cached_tokens=0, cache_write_tokens=0),
+                        output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+                    ),
+                )
+
+        client = OpenAIFallbackClient.__new__(OpenAIFallbackClient)
+        client.config = OpenAIConfig(api_key="test")
+        client.client = SimpleNamespace(responses=MockResponses())
+        decision = client.decide_raw_message(raw_message)
+
+        payload = json.loads(captured["input"])
+        self.assertEqual(payload, {"message": raw_message})
+        self.assertNotIn("candidates", payload)
+        self.assertEqual(decision.otp_codes, ["12 34 56"])
+        self.assertEqual(decision.verification_url, "https://example.com/a?x=1")
+        self.assertEqual(captured["prompt_cache_key"], "otp-raw-openai-v1")
+        self.assertEqual(captured["max_output_tokens"], 1200)
+        self.assertFalse(captured["store"])
+
 
 if __name__ == "__main__":
     unittest.main()

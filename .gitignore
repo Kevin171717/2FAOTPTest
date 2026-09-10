@@ -10,6 +10,7 @@ node_modules/
 # Paid API responses/checkpoints can contain message excerpts and response IDs.
 results/bge_openai/*.json
 results/regex_openai/*.json
+results/raw_openai/*.json
 
 # Local previews and inspection traces are reproducible build artifacts.
 outputs/**/preview/

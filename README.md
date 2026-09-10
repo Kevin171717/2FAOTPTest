@@ -6,6 +6,7 @@
 2. Regex v2 + BGE
 3. Regex v2 + BGE + OpenAI fallback
 4. Regex v2 + OpenAI（所有含 Regex 候選的訊息都送 API）
+5. Raw message + OpenAI（原始 `text` 直接送 API，不使用 Regex、BGE 或清理）
 
 OpenAI 只能從 Regex 提供的候選 ID 中選擇，不得自行生成 OTP。Ground truth 在預測完成後才用於計分，不會送入 prompt 或路由邏輯。
 
@@ -19,8 +20,11 @@ OpenAI 只能從 Regex 提供的候選 ID 中選擇，不得自行生成 OTP。G
 | Regex v2 + OpenAI | gpt-5.6-luna | 103/103 | 103/103 | 7/10 | 0/15 | 123 | US$0.022116 |
 | Regex v2 + BGE + OpenAI fallback | gpt-4o | 103/103 | 103/103 | 7/10 | 0/15 | 66 | US$0.183908 |
 | Regex v2 + OpenAI | gpt-4o | 103/103 | 103/103 | 7/10 | 0/15 | 123 | US$0.233120 |
+| Raw message + OpenAI | gpt-4o | 96/103 | 96/103 | 9/10 | 2/15 | 128 | US$0.346293 |
 
 這份資料上，Luna 與 GPT-4o 的品質結果相同。使用 GPT-4o 時，Hybrid 少 57 次 API 呼叫，節省約 21.1% API 成本，並減少外傳訊息數。GPT-4o 的本次平均延遲在 Hybrid 約增加 0.7%，在 Regex-only 約降低 14.1%，但成本約為 Luna 的 10.3 至 10.5 倍。延遲會受網路與服務負載影響，正式部署前仍應用未參與開發的 holdout set 驗證泛化能力並重複量測。
+
+Raw-message 消融採嚴格字串比對。若按資料標註的輸入形式，將純數字 OTP 的空格、連字號與 `G-` 顯示前綴正規化後，OTP Top-1 為 102/103；唯一真正未取得的 OTP 只存在資料集 `note` 所代表的主旨，不在送入 API 的 `text` 內。
 
 ## 環境需求
 
@@ -104,6 +108,7 @@ Regex v2 + OpenAI 小規模付費 smoke test：
 ```powershell
 .\run_bge_openai_experiment.cmd
 .\run_regex_openai_experiment.cmd
+.\run_raw_openai_experiment.cmd
 ```
 
 實驗每完成一筆就寫入 checkpoint。中斷後可加上 `--resume` 繼續。付費執行前建議先使用 `--dry-run` 和 `--max-api-calls`。
@@ -151,4 +156,4 @@ OpenAI JSON 可能包含候選上下文與 response ID，因此預設不推送 G
 - `.env`、`.venv`、API JSON、對談紀錄、截圖與本機參考檔都由 `.gitignore` 排除。
 - 上傳前應執行 secret scan，並以 `git status` 檢查 staged files。
 
-更完整的實驗說明見 [docs/BGE_OPENAI_EXPERIMENT.md](docs/BGE_OPENAI_EXPERIMENT.md)、[docs/REGEX_OPENAI_EXPERIMENT.md](docs/REGEX_OPENAI_EXPERIMENT.md) 與 [docs/REPRODUCTION.md](docs/REPRODUCTION.md)。
+更完整的實驗說明見 [docs/BGE_OPENAI_EXPERIMENT.md](docs/BGE_OPENAI_EXPERIMENT.md)、[docs/REGEX_OPENAI_EXPERIMENT.md](docs/REGEX_OPENAI_EXPERIMENT.md)、[docs/RAW_OPENAI_EXPERIMENT.md](docs/RAW_OPENAI_EXPERIMENT.md) 與 [docs/REPRODUCTION.md](docs/REPRODUCTION.md)。
